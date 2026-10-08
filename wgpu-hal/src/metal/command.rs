@@ -1227,7 +1227,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     )
                 }
             }
-            if let Some(ts) = layout.immediates_infos.ts {
+            // Only when the bound pipeline has the stage. On an M1, object or mesh bytes on an
+            // ordinary render encoder start the driver's software geometry pipeline, which can
+            // abort the process.
+            if let Some(ts) = self.state.stage_infos.ts.immediates {
                 if self.shared.private_caps.mesh_shaders {
                     unsafe {
                         render.setObjectBytes_length_atIndex(
@@ -1238,7 +1241,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     }
                 }
             }
-            if let Some(ms) = layout.immediates_infos.ms {
+            if let Some(ms) = self.state.stage_infos.ms.immediates {
                 if self.shared.private_caps.mesh_shaders {
                     unsafe {
                         render.setMeshBytes_length_atIndex(
@@ -1306,6 +1309,28 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 bias.slope_scale,
                 bias.clamp,
             );
+        }
+
+        // `set_immediates` skips the object and mesh stages while a pipeline without them is
+        // bound, and a new pipeline on the same layout gets no new `set_immediates`.
+        let immediates = &self.state.immediates;
+        for (info, is_object) in [
+            (self.state.stage_infos.ts.immediates, true),
+            (self.state.stage_infos.ms.immediates, false),
+        ] {
+            let Some(info) = info else { continue };
+            if immediates.len() < info.count as usize {
+                continue;
+            }
+            let bytes = NonNull::new(immediates.as_ptr().cast_mut().cast()).unwrap();
+            let length = info.count as usize * WORD_SIZE;
+            unsafe {
+                if is_object {
+                    encoder.setObjectBytes_length_atIndex(bytes, length, info.buffer_index as _)
+                } else {
+                    encoder.setMeshBytes_length_atIndex(bytes, length, info.buffer_index as _)
+                }
+            };
         }
 
         if pipeline.vs_info.is_some() {
